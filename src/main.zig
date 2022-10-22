@@ -15,6 +15,7 @@ pub fn main() anyerror!void {
         return;
     };
     var dir = try fs.cwd().openDir(public_path, .{});
+    defer dir.close();
     const self_addr = try net.Address.parseIp("127.0.0.1", 9000);
     std.log.info("{}", .{self_addr});
     var listener = net.StreamServer.init(.{});
@@ -41,6 +42,7 @@ const ServeFileError = error {
     RecvHeaderEOF,
     RecvHeaderExceededBuffer,
     HeaderDidNotMatch,
+    FileNotFound,
 };
 
 fn serveFile(stream: *const net.Stream, dir: fs.Dir) !void {
@@ -90,8 +92,15 @@ fn serveFile(stream: *const net.Stream, dir: fs.Dir) !void {
         file_ext = ".html";
         file_path = path_fbs.getWritten();
     }
+    try sendFile(stream, dir, file_path, file_ext);
+}
+
+fn sendFile(stream: *const net.Stream, dir: fs.Dir, file_path: []const u8, file_ext: []const u8) !void {
     std.log.info("Opening {s}", .{file_path});
-    var body_file = try dir.openFile(file_path, .{});
+    const body_file = dir.openFile(file_path, .{}) catch {
+        try sendHttp404(stream);
+        return;
+    };
     defer body_file.close();
     const file_len = try body_file.getEndPos();
     
@@ -135,6 +144,18 @@ fn serveFile(stream: *const net.Stream, dir: fs.Dir) !void {
 
         send_total += send_len;
     }
+} 
+
+fn sendHttp404(stream: *const net.Stream) !void {
+    const http_404_head = 
+        "HTTP/1.1 404 Not Found\r\n" ++
+        "Connection: close\r\n" ++
+        "Content-Type: text/html\r\n" ++
+        "Content-Length: {}\r\n" ++
+        "\r\n";
+    const http_404_response = "<html><head><title>Not Found</title></head><body><h1>Not Found</h1></body></html>";
+    try stream.writer().print(http_404_head, .{http_404_response.len});
+    try stream.writer().print(http_404_response, .{});
 }
 
 test "basic test" {
